@@ -1,7 +1,7 @@
-import socket 
+import socket
 
-# Configuraciones iniciales - USANDO IP HARDCODEADA PARA VALIDACIÓN
-target_ip = "192.168.0.1" # <--- ¡Pon aquí la IP de tu Router/Gateway!
+# Pedir la IP de destino al usuario
+target_ip = input("Por favor, introduce la IP a escanear (Ej: 10.0.0.1 o 127.0.0.1): ")
 port_range = [21, 22, 80, 443] 
 
 # Establecer un timeout de 1 segundo (necesario para no colgarse)
