@@ -1,98 +1,106 @@
-import socket
-import threading
-from queue import Queue
-import time
+import socket       # Para las conexiones de red (la "puerta")
+import threading    # Para crear hilos (trabajadores paralelos)
+from queue import Queue # Estructura de datos "Thread-Safe" (segura para hilos)
+import sys          # Para salir del programa limpiamente si hay error
 
-# ===============================================
-# CONFIGURACIÓN INICIAL
-# ===============================================
+# ==========================================
+# 1. CONFIGURACIÓN INTERACTIVA (INPUTS)
+# ==========================================
+print("--- ESCÁNER MULTIHILO (THREADED) ---\n")
+print("[*] Modo Educativo: Activado\n")
 
-# Rango de puertos comunes a escanear. 
-# Escanearemos los primeros 1024 puertos conocidos.
-PORT_RANGE = range(1, 1025)
+# Pedimos la IP al usuario. 
+target = input("Introduce la IP a escanear (Ej: 192.168.0.50): ")
 
-# Cola para almacenar los números de puerto que vamos a escanear
-q = Queue()
+# Pedimos el rango de puertos y validamos que sean números.
+try:
+    start_port = int(input("Puerto inicial (Ej: 1): "))
+    end_port = int(input("Puerto final (Ej: 1000): "))
+except ValueError:
+    print("\n[!] Error: Debes introducir números enteros.")
+    sys.exit() # Cierra el programa si el usuario escribe letras en vez de números
 
-# ===============================================
-# FUNCIÓN DE ESCANEO DE PUERTO (EJECUTADA POR HILO)
-# ===============================================
+# ==========================================
+# 2. PREPARACIÓN DE HERRAMIENTAS
+# ==========================================
 
-def thread_port_scan(port_list_queue, target_ip, timeout=0.5):
-    """Función worker que toma puertos de la cola y realiza la conexión."""
-    while True:
-        # Intenta obtener un puerto de la cola. Si la cola está vacía, sale.
-        try:
-            port = port_list_queue.get(timeout=1)
-        except Exception:
-            break
-            
-        # 1. Crear el objeto socket (IPv4 y TCP)
+# Creamos la COLA (Queue).
+# Diferencia con una lista normal []:
+# Una lista normal puede corromperse si 100 hilos intentan leerla a la vez.
+# La Queue gestiona el tráfico automáticamente ("Pase usted, luego usted...").
+queue = Queue()
+
+# Lista normal para guardar los resultados (puertos abiertos).
+open_ports = []
+
+# ==========================================
+# 3. DEFINICIÓN DEL TRABAJO (WORKER)
+# ==========================================
+
+def port_scan(port):
+    """
+    Función que hace el trabajo sucio: intenta conectar a UN puerto.
+    Es la misma lógica que usaste en scanner_v2.py.
+    """
+    try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout) # Tiempo máximo para esperar la respuesta
+        s.settimeout(1) # Esperamos máximo 1 segundo
+        result = s.connect_ex((target, port))
         
-        try:
-            # 2. Intentar la conexión. connect_ex devuelve 0 si es exitoso.
-            result = s.connect_ex((target_ip, port))
-
-            if result == 0:
-                try:
-                    # Intenta obtener el nombre del servicio para hacerlo más legible
-                    service = socket.getservbyport(port, "tcp")
-                except OSError:
-                    service = "Desconocido"
-                
-                print(f"[+] PUERTO ABIERTO: {port} ({service})")
-
-        except Exception as e:
-            # Manejar errores de red o DNS si ocurren
-            pass
+        if result == 0:
+            # Si conecta, guardamos el puerto en la lista de hallazgos
+            open_ports.append(port)
             
-        s.close()
+        s.close() # Siempre cerramos el socket
+    except:
+        pass
+
+def worker():
+    """
+    Esta es la vida de cada Hilo (Cajero).
+    Es un bucle infinito que solo para cuando se apaga el programa.
+    """
+    while not queue.empty():
+        # 1. Obtener tarea: Saca un número de puerto de la cola
+        port = queue.get()
         
-        # Marca la tarea como completada para la cola
-        port_list_queue.task_done()
+        # 2. Trabajar: Llama a la función de escaneo
+        port_scan(port)
+        
+        # 3. Avisar: Le dice a la Queue "Ya terminé con este puerto, dame otro o táchalo"
+        queue.task_done()
 
-# ===============================================
-# FUNCIÓN PRINCIPAL
-# ===============================================
+# ==========================================
+# 4. EJECUCIÓN PRINCIPAL (EL JEFE DE OBRA)
+# ==========================================
 
-def run_multithread_scanner():
-    print("--- ESCÁNER DE PUERTOS AVANZADO (Multihilo) ---")
+# LLENADO DE LA COLA:
+# Metemos todas las tareas (puertos) en la cola antes de empezar.
+# range(start, end + 1) es necesario porque Python excluye el último número por defecto.
+for port in range(start_port, end_port + 1):
+    queue.put(port)
+
+print(f"\n[*] Iniciando escaneo en {target} con 100 hilos paralelos...")
+
+# CONTRATACIÓN DE HILOS:
+# Creamos 100 hilos para procesar la cola rápidamente.
+for t in range(100):
+    thread = threading.Thread(target=worker)
     
-    # 1. Pedir la IP de destino
-    target_ip = input("Introduce la IP de destino a escanear (Ej: 10.0.0.1): ")
-
-    # 2. Llenar la cola con todos los puertos a escanear
-    print(f"[!] Escaneando los puertos 1 a 1024 en {target_ip}...")
-    for port in PORT_RANGE:
-        q.put(port)
-
-    # 3. Iniciar los hilos (workers)
-    # Usaremos 100 hilos para escanear 1024 puertos muy rápidamente.
-    num_threads = 100
-    threads = []
+    # Daemon = True es VITAL.
+    # Significa: "Si el programa principal termina, mata a este hilo inmediatamente".
+    # Sin esto, el programa se quedaría colgado esperando eternamente aunque el trabajo haya terminado.
+    thread.daemon = True
     
-    start_time = time.time()
-    
-    for i in range(num_threads):
-        # Pasar la cola, la IP de destino y el timeout a la función worker
-        worker = threading.Thread(target=thread_port_scan, args=(q, target_ip))
-        worker.setDaemon(True) 
-        worker.start()
-        threads.append(worker)
+    thread.start() # ¡A trabajar!
 
-    # 4. Esperar a que la cola termine
-    q.join()
+# ESPERA FINAL (JOIN):
+# queue.join() bloquea el script principal.
+# Le dice al programa: "No te cierres hasta que la cola esté vacía".
+queue.join()
 
-    end_time = time.time()
-    
-    print("\n--- RESUMEN DEL ESCANEO ---")
-    print(f"IP Escaneada: {target_ip}")
-    print(f"Puertos: 1 a 1024")
-    print(f"Tiempo Total: {end_time - start_time:.2f} segundos")
-    print("Escaneo Completado.")
-
-
-if __name__ == "__main__":
-    run_multithread_scanner()
+print("----------------------------------------------------")
+# Imprimimos la lista ordenada (sorted) para que se vea bonito
+print(f"Puertos abiertos en {target}: {sorted(open_ports)}")
+print("----------------------------------------------------")
+print("[*] Escaneo finalizado.")
